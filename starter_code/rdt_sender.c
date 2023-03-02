@@ -25,12 +25,13 @@ int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 struct itimerval timer; 
 tcp_packet *sndpkt;
-tcp_packet *sndpkt_window[WINDOW_SIZE]; // 10 packets in this window
-struct timeval current_packet_time;
-struct timeval packet_times[WINDOW_SIZE]; // keep track of time that a packet was sent
+tcp_packet sndpkt_window[WINDOW_SIZE]; // 10 packets in this window
 tcp_packet *recvpkt;
 sigset_t sigmask;
 
+struct timeval sent_times[WINDOW_SIZE]; // keep track of time that a packet was sent
+struct timeval oldest_sent_time;
+struct timeval cur_time;
 
 void resend_packets(int sig)
 {
@@ -39,8 +40,10 @@ void resend_packets(int sig)
         //Resend all packets range between 
         //sendBase and nextSeqNum
         VLOG(INFO, "Timeout happened");
+        printf("retransmit packets");
         for (int i; i < WINDOW_SIZE; i++) { // retransmit all packets in the window
-            if(sendto(sockfd, sndpkt_window[i], TCP_HDR_SIZE + get_data_size(sndpkt_window[i]), 0, 
+            printf("packet %d retrasmitting.", sndpkt_window[i].hdr.seqno);
+            if(sendto(sockfd, &sndpkt_window[i], TCP_HDR_SIZE + get_data_size(&sndpkt_window[i]), 0, 
                         (const struct sockaddr *) &serveraddr, serverlen) < 0)
             {
                 error("sendto");
@@ -130,8 +133,6 @@ int main (int argc, char **argv)
     next_seqno = 0;
     while (1)
     {
-        send_base = next_seqno;
-
         for (int packet_no = 0; packet_no < WINDOW_SIZE; packet_no++) {
             // read the file data
             len = fread(buffer, 1, DATA_SIZE, fp);
@@ -148,7 +149,7 @@ int main (int argc, char **argv)
             sndpkt->hdr.seqno = next_seqno;
             next_seqno += len;
             memcpy(sndpkt->data, buffer, len);
-            sndpkt_window[packet_no] = sndpkt; // add packet to the window
+            sndpkt_window[packet_no] = *sndpkt; // add packet to the window
 
             /*
             * If the sendto is called for the first time, the system will
@@ -160,42 +161,66 @@ int main (int argc, char **argv)
             {
                 error("sendto");
             }
+            VLOG(DEBUG, "Sending packet %d to %s", 
+                    sndpkt_window[packet_no].hdr.seqno, inet_ntoa(serveraddr.sin_addr));
 
-            gettimeofday(&packet_times[packet_no], 0);
+            gettimeofday(&sent_times[packet_no], 0);
 
             // start timer after sending the first packet
             if (packet_no == 0) {
-                current_packet_time = packet_times[packet_no]; // set current_packet_time as the time that 1st packet was sent
+                cur_time = sent_times[packet_no]; // set current_packet_time as the time that 1st packet was sent
                 start_timer(); // start timer for the window
             }
         }
 
         //Wait for ACK
         do {
-            VLOG(DEBUG, "Sending packet %d to %s", 
-                    send_base, inet_ntoa(serveraddr.sin_addr));
+            
+            if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+                        (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+            {
+                error("recvfrom");
+            }
+            recvpkt = (tcp_packet *) buffer;
+            assert(get_data_size(recvpkt) <= DATA_SIZE);
+            send_base = recvpkt->hdr.ackno;
+
 
             // start_timer();
             //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
             //struct sockaddr *src_addr, socklen_t *addrlen);
-            do
-            {
-                if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                            (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
-                {
-                    error("recvfrom");
-                }
-                recvpkt = (tcp_packet *) buffer;
-                assert(get_data_size(recvpkt) <= DATA_SIZE);
-            }while(recvpkt->hdr.ackno < next_seqno);    // ignore duplicate ACKs
-            
-            stop_timer();
+            // do
+            // {
+            //     if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+            //                 (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+            //     {
+            //         error("recvfrom");
+            //     }
+            //     recvpkt = (tcp_packet *) buffer;
+            //     assert(get_data_size(recvpkt) <= DATA_SIZE);
+            // }while(recvpkt->hdr.ackno < next_seqno);    // ignore duplicate ACKs
             
             printf("ackno %d, next_seqno %d\n", recvpkt->hdr.ackno, next_seqno);
             /* resend pack if don't recv ACK */
-        } while(recvpkt->hdr.ackno != next_seqno);
+        } while(recvpkt->hdr.ackno != next_seqno); // wait until the ACK is received for the end of the window
+        
+        stop_timer(); // stop timer
+        send_base = recvpkt->hdr.ackno; // slide the window
+        gettimeofday(&cur_time, 0);
 
-        init_timer(RETRY + recvpkt->hdr.ackno/len, resend_packets);
+        for (int i = 0; i < WINDOW_SIZE; i++) {
+            if (sndpkt_window[i].hdr.seqno == recvpkt->hdr.ackno) {
+                oldest_sent_time = sent_times[i];
+            }
+        }
+
+        // calculate the new timeout value
+
+        int elapsed_time = (int) ((cur_time.tv_sec - oldest_sent_time.tv_sec) * 1000);
+        // int elapsed_time = (int) timedifference_msec(oldest_sent_time, cur_time); // difference between current time and oldest unACKed packet's sent time
+        elapsed_time = RETRY - elapsed_time;
+        init_timer(elapsed_time, resend_packets);
+
     }
 
     free(sndpkt);

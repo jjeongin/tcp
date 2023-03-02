@@ -107,24 +107,21 @@ int main(int argc, char **argv) {
          */
         gettimeofday(&tp, NULL);
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
-        // deliver data to the upper layer
-        // send ACK nextseqnum
 
         sndpkt = make_packet(0);
         sndpkt->hdr.ctr_flags = ACK;
+
+        printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
         
-        if (recvpkt->hdr.seqno == wanted_seq_num) { //if the seq number is correct
+        if (recvpkt->hdr.seqno == wanted_seq_num) { // if the seq number is correct
             fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
             fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
             sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
             wanted_seq_num = sndpkt->hdr.ackno;
         }
-        else { //if the seq number is incorrect
-          sndpkt->hdr.ackno = wanted_seq_num;
-          printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
+        else { // if the seq number is incorrect
+            sndpkt->hdr.ackno = wanted_seq_num;
         }
-
-        // printf("recvpkt->hdr.seqno %d, wanted_seq_num %d", recvpkt->hdr.seqno, wanted_seq_num);
         
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
