@@ -107,46 +107,22 @@ int main(int argc, char **argv) {
         gettimeofday(&tp, NULL);
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
         // deliver data to the upper layer
-        fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
-        fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
         // send ACK nextseqnum
+      
         sndpkt = make_packet(0);
-        sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
-
-
-        // start
-        // wanted_seq_num = 0
-
-        // if recvpkt->hdr.seqno == wanted_seq_num
-            // sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
-            // send ackno
-            // wanted_seq_num = ackno
-        // else:
-            // discard the received packet
-            // make send packet
-            // sndpkt->hdr.ackno = wanted_seq_num
-            // send ackno wanted_seq_num as ACK
-            // sned sndpkt
-
-        // on sender, you have window:
-        // array_of_times
-
-            // you send 1st packet - oldest packet in your window
-            // immediatley start timer 
-            // send 2nd packet note its time
-            // send until nth packet
-
-        // we are now receiving
-        // if timeout occurs
-            // we will send all the packets in the window
-        // if no timeout, (if we receive in-order ACK)
-            // we stop the timer
-            // slide the window (initialize it -1 or remove from linked list the first/oldest UnACKed packet )
-            // shift the timer to the oldest UN ACKed packet
-                // calculate how much time the 2nd packet has left
-                // 500 - TIME since packet 2 was sent
-
         sndpkt->hdr.ctr_flags = ACK;
+        
+        
+        if (recvpkt->hdr.seqno == wanted_seq_num) { //if the seq number is correct
+            fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
+            fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
+            sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
+            wanted_seq_num = sndpkt->hdr.ackno;
+        }
+        else { //if the seq number is incorrect
+          sndpkt->hdr.ackno = wanted_seq_num;
+        }
+        
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
             error("ERROR in sendto");
