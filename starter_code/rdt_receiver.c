@@ -32,6 +32,7 @@ int main(int argc, char **argv) {
     FILE *fp;
     char buffer[MSS_SIZE];
     struct timeval tp;
+    int wanted_seq_num = 0;
 
     /* 
      * check command line arguments 
@@ -108,10 +109,9 @@ int main(int argc, char **argv) {
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
         // deliver data to the upper layer
         // send ACK nextseqnum
-      
+
         sndpkt = make_packet(0);
         sndpkt->hdr.ctr_flags = ACK;
-        
         
         if (recvpkt->hdr.seqno == wanted_seq_num) { //if the seq number is correct
             fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
@@ -121,7 +121,10 @@ int main(int argc, char **argv) {
         }
         else { //if the seq number is incorrect
           sndpkt->hdr.ackno = wanted_seq_num;
+          printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
         }
+
+        // printf("recvpkt->hdr.seqno %d, wanted_seq_num %d", recvpkt->hdr.seqno, wanted_seq_num);
         
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {

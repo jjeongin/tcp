@@ -131,8 +131,8 @@ int main (int argc, char **argv)
     {
         send_base = next_seqno;
 
-        int packet_no = 0; // reinitialize to 0
-        while (packet_no < 10) {
+        // int packet_no = 0; // reinitialize to 0
+        for (int packet_no = 0; packet_no < WINDOW_SIZE; packet_no++) {
             // read the file data
             len = fread(buffer, 1, DATA_SIZE, fp);
             if (len <= 0)
@@ -145,10 +145,10 @@ int main (int argc, char **argv)
             }
 
             // send_base = next_seqno;
-            next_seqno += len;
             sndpkt = make_packet(len);
-            memcpy(sndpkt->data, buffer, len);
             sndpkt->hdr.seqno = next_seqno;
+            next_seqno += len;
+            memcpy(sndpkt->data, buffer, len);
             // printf("sndpkt->seqno: %d\n", sndpkt->hdr.seqno);
             sndpkt_window[packet_no] = sndpkt;
 
@@ -163,7 +163,7 @@ int main (int argc, char **argv)
                 error("sendto");
             }
 
-            packet_no += 1;
+            // packet_no += 1;
         }
 
         //Wait for ACK
