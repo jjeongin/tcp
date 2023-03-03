@@ -40,9 +40,8 @@ void resend_packets(int sig)
         //Resend all packets range between 
         //sendBase and nextSeqNum
         VLOG(INFO, "Timeout happened");
-        printf("retransmit packets");
-        for (int i; i < WINDOW_SIZE; i++) { // retransmit all packets in the window
-            printf("packet %d retrasmitting.", sndpkt_window[i].hdr.seqno);
+        for (int i = 0; i < WINDOW_SIZE; i++) { // retransmit all packets in the window
+            printf("packet %d retrasmitting.\n", sndpkt_window[i].hdr.seqno);
             if(sendto(sockfd, &sndpkt_window[i], TCP_HDR_SIZE + get_data_size(&sndpkt_window[i]), 0, 
                         (const struct sockaddr *) &serveraddr, serverlen) < 0)
             {
@@ -140,6 +139,7 @@ int main (int argc, char **argv)
             {
                 VLOG(INFO, "End Of File has been reached");
                 sndpkt = make_packet(0);
+                sndpkt->hdr.seqno = next_seqno;
                 sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
                         (const struct sockaddr *) &serveraddr, serverlen);
                 break;
