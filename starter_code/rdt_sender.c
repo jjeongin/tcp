@@ -206,9 +206,21 @@ int main (int argc, char **argv)
         
         stop_timer(); // stop timer
         send_base = recvpkt->hdr.ackno; // slide the window
+        /*
+        update sndpkt_window accordingly based on ackno
+        delete all the acked packets by comparing their seqno with ackno 
+        and make it start from the last unACKed packet (where packet's seqno == recvpkt->hdr.ackno)
+        */
         gettimeofday(&cur_time, 0);
 
         for (int i = 0; i < WINDOW_SIZE; i++) {
+            /*
+            apply the above logic here as well, we can delete all of the 
+            packet's sent time in the array here 
+            which means basically we can delete all elements in the sent_times array
+            before the below logic is called
+            (we can also reinitialize and add each time one by one)
+            */
             if (sndpkt_window[i].hdr.seqno == recvpkt->hdr.ackno) {
                 oldest_sent_time = sent_times[i];
             }
