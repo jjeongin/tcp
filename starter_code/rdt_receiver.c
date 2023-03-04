@@ -85,7 +85,6 @@ int main(int argc, char **argv) {
     VLOG(DEBUG, "epoch time, bytes received, sequence number");
 
     clientlen = sizeof(clientaddr);
-    // ackno_to_receive = 
     while (1) {
         /*
          * recvfrom: receive a UDP datagram from a client
