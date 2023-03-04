@@ -130,6 +130,7 @@ int main (int argc, char **argv)
     init_timer(RETRY, resend_packets);
     send_base = 0;
     next_seqno = 0;
+    lastACKed = 0;
     while (1)
     {
         for (int packet_no = 0; packet_no < WINDOW_SIZE; packet_no++) {
@@ -202,6 +203,12 @@ int main (int argc, char **argv)
             
             printf("ackno %d, next_seqno %d\n", recvpkt->hdr.ackno, next_seqno);
             /* resend pack if don't recv ACK */
+             for (int packet_no = 0; packet_no < WINDOW_SIZE; packet_no++) {
+                if ((sndpkt_window[packet_no].hdr.seqno) ==recvpkt->hdr.ackno) {
+                    lastACKed=packet_no;
+                    break;
+                }
+            }
         } while(recvpkt->hdr.ackno != next_seqno); // wait until the ACK is received for the end of the window
         
         stop_timer(); // stop timer
