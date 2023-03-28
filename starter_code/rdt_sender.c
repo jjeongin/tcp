@@ -16,23 +16,28 @@
 #include"common.h"
 
 #define STDIN_FD    0
-#define RETRY  120 //millisecond
+#define RETRY  120 // millisecond
 
 int next_seqno = 0;
 int send_base = 0;
+int cwnd = 1; // for cwnd size
+float cwnd_f = 1.0; // for the actual cwnd float size
+int ssthresh = 64;
+int dup_ackno = 0; // to check dup ACK number
+int dup_cnt = 0; // to count dup ACKs
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
-struct itimerval timer; 
+struct itimerval timer;
 tcp_packet *sndpkt;
-tcp_packet *sndpkt_window[WINDOW_SIZE]; // 10 packets in this window
+tcp_packet *sndpkt_window[MAX_WINDOW_SIZE]; // packet window
 tcp_packet *recvpkt;
 int lastUnACKed;
 int EOF_seqno;
 int EOF_read = 0; // 1 if EOF has been read
 sigset_t sigmask;
 
-struct timeval sent_times[WINDOW_SIZE]; // keep track of time that a packet was sent
+struct timeval sent_times[MAX_WINDOW_SIZE]; // keep track of the time that a packet was sent
 struct timeval oldest_sent_time;
 struct timeval cur_time;
 
@@ -72,7 +77,7 @@ void resend_packets(int sig)
         //Resend all packets range between sendBase and nextSeqNum
         VLOG(INFO, "Timeout happened");
 
-        lastUnACKed = (send_base / DATA_SIZE) % WINDOW_SIZE; // lastUnACKed packet's index in the window
+        lastUnACKed = (send_base / DATA_SIZE); // lastUnACKed packet's index in the window
         // printf("send_base %d, lastUnACKed %d\n", send_base, lastUnACKed);
 
         for (int i = lastUnACKed; i < WINDOW_SIZE; i++) { // retransmit all packets in the window
@@ -116,7 +121,7 @@ int main (int argc, char **argv)
 
     /* socket: create the socket */
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) 
+    if (sockfd < 0)
         error("ERROR opening socket");
 
 
@@ -136,53 +141,48 @@ int main (int argc, char **argv)
 
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
 
-    //Stop and wait protocol
+    // Stop and wait protocol
     init_timer(RETRY, resend_packets);
     send_base = 0;
     next_seqno = 0;
 
-    // send first 10 packets
-    for (int packet_no = 0; packet_no < WINDOW_SIZE; packet_no++) {
-        // read the file data
-        len = fread(buffer, 1, DATA_SIZE, fp);
-        if (len <= 0)
-        {
-            VLOG(INFO, "End Of File has been reached");
-            sndpkt = make_packet(0);
-            sndpkt->hdr.seqno = next_seqno;
-            // sndpkt_window[packet_no] = *sndpkt; // add packet to the window
-            EOF_seqno = next_seqno;
-            EOF_read = 1; // mark as read
-            sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
-                    (const struct sockaddr *) &serveraddr, serverlen);
-            break;
-        }
-
-        sndpkt = make_packet(len);
+    // send the first packet
+    // read the file data
+    len = fread(buffer, 1, DATA_SIZE, fp);
+    if (len <= 0)
+    {
+        VLOG(INFO, "End Of File has been reached");
+        sndpkt = make_packet(0);
         sndpkt->hdr.seqno = next_seqno;
-        next_seqno += len;
-        memcpy(sndpkt->data, buffer, len);
-        sndpkt_window[packet_no] = sndpkt; // add packet to the window
-
-        if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
-                    (const struct sockaddr *) &serveraddr, serverlen) < 0)
-        {
-            error("sendto");
-        }
-        VLOG(DEBUG, "Sending packet %d to %s", 
-                sndpkt_window[packet_no]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-
-        gettimeofday(&sent_times[packet_no], 0);
-        if (packet_no == 0) {
-            start_timer();
-        }
+        EOF_seqno = next_seqno;
+        EOF_read = 1; // mark as read
+        sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
+                (const struct sockaddr *) &serveraddr, serverlen);
     }
+
+    sndpkt = make_packet(len);
+    sndpkt->hdr.seqno = next_seqno;
+    next_seqno += len;
+    memcpy(sndpkt->data, buffer, len);
+    sndpkt_window[0] = sndpkt; // add packet to the window
+
+    if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+                (const struct sockaddr *) &serveraddr, serverlen) < 0)
+    {
+        error("sendto");
+    }
+    VLOG(DEBUG, "Sending packet %d to %s", 
+            sndpkt_window[0]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+
+    gettimeofday(&sent_times[0], 0);
+    start_timer();
 
     while (1)
     {
         //Wait for ACK
         do {
             do {
+                // for every ACK received
                 if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
                             (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
                 {
@@ -190,20 +190,41 @@ int main (int argc, char **argv)
                 }
                 recvpkt = (tcp_packet *) buffer;
                 assert(get_data_size(recvpkt) <= DATA_SIZE);
-                send_base = recvpkt->hdr.ackno; // slide the window
-
+                send_base = recvpkt->hdr.ackno; // slide the window (set send_base to the next byte we should send)
                 if (recvpkt->hdr.ackno == EOF_seqno && EOF_read == 1) { // if EOF, terminate the program
                     // printf("EOF_seqno %d\n", EOF_seqno);
                     free(sndpkt);
                     return 0;
                 }
-            }while(recvpkt->hdr.ackno < next_seqno);   //ignore duplicate ACKs
 
-            lastUnACKed = (send_base / DATA_SIZE) % WINDOW_SIZE;
+                if (dup_ackno == recvpkt->hdr.ackno) {
+                    dup_cnt++; // increase counter for dup ACKs
+                }
+                dup_ackno = recvpkt->hdr.ackno;
+                if (dup_cnt == 3) { // Fast Retransmit
+                    // resend packets
+                    // ssthresh = max(cwnd/2, 2)
+                    // cwnd = 1
+                    dup_cnt = 0; // set dup count to 0
+                }
+            }while(recvpkt->hdr.ackno < next_seqno); // ignore duplicate ACKs
 
-            if (lastUnACKed == 0) {
-                lastUnACKed = 10;
+            // change window size (congestion control)
+            if (cwnd < ssthresh) { // Slow Start
+                cwnd++;
             }
+            else { // Congestion Avoidance
+                cwnd_f += 1/cwnd;
+                cwnd = floor(cwnd_f);
+            }
+
+            // lastUnACKed = (send_base / DATA_SIZE) % cwnd;
+            // if (lastUnACKed == 0) {
+            //     lastUnACKed = cwnd;
+            // }
+            lastUnACKed = (send_base / DATA_SIZE);
+
+            // reconfigure the timer with the lastUnACKed packet's sent_time
             stop_timer();
             gettimeofday(&cur_time, 0);
             oldest_sent_time = sent_times[lastUnACKed];
@@ -213,7 +234,8 @@ int main (int argc, char **argv)
             timer.it_value.tv_usec = (elapsed_time % 1000) * 1000;
             start_timer();
             
-            for (int packet_no = 0; packet_no < lastUnACKed; packet_no++) {
+            // send the next window
+            for (int packet_no = lastUnACKed; packet_no < lastUnACKed + cwnd; packet_no++) {
                 // read new file data
                 len = fread(buffer, 1, DATA_SIZE, fp);
                 if (len <= 0)
