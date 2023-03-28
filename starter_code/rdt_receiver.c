@@ -96,6 +96,8 @@ int main(int argc, char **argv) {
         }
         recvpkt = (tcp_packet *) buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
+        // printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
+        
         if ( recvpkt->hdr.data_size == 0 && recvpkt->hdr.seqno == wanted_seq_num) {
             //VLOG(INFO, "End Of File has been reached");
             fclose(fp);
@@ -109,9 +111,6 @@ int main(int argc, char **argv) {
 
         sndpkt = make_packet(0);
         sndpkt->hdr.ctr_flags = ACK;
-
-        printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
-        
         if (recvpkt->hdr.seqno == wanted_seq_num) { // if the seq number is correct
             fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
             fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);

@@ -73,13 +73,11 @@ void resend_packets(int sig)
         VLOG(INFO, "Timeout happened");
 
         lastUnACKed = (send_base / DATA_SIZE) % WINDOW_SIZE; // lastUnACKed packet's index in the window
-        printf("send_base %d, lastUnACKed %d\n", send_base, lastUnACKed);
+        // printf("send_base %d, lastUnACKed %d\n", send_base, lastUnACKed);
 
         for (int i = lastUnACKed; i < WINDOW_SIZE; i++) { // retransmit all packets in the window
             if (sndpkt_window[i]->hdr.seqno >= sndpkt_window[lastUnACKed]->hdr.seqno) { // if older packets
-                printf("retransmitting packet %d\n", sndpkt_window[i]->hdr.seqno);
-                
-                // sndpkt = &sndpkt_window[i];
+                // printf("retransmitting packet %d\n", sndpkt_window[i]->hdr.seqno);
                 if(sendto(sockfd, sndpkt_window[i], TCP_HDR_SIZE + get_data_size(sndpkt_window[i]), 0, 
                             (const struct sockaddr *) &serveraddr, serverlen) < 0)
                 {
@@ -195,7 +193,7 @@ int main (int argc, char **argv)
                 send_base = recvpkt->hdr.ackno; // slide the window
 
                 if (recvpkt->hdr.ackno == EOF_seqno && EOF_read == 1) { // if EOF, terminate the program
-                    printf("EOF_seqno %d\n", EOF_seqno);
+                    // printf("EOF_seqno %d\n", EOF_seqno);
                     free(sndpkt);
                     return 0;
                 }
