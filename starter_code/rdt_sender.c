@@ -80,22 +80,25 @@ void resend_packets(int sig)
         lastUnACKed = (send_base / DATA_SIZE); // lastUnACKed packet's index in the window
         // printf("send_base %d, lastUnACKed %d\n", send_base, lastUnACKed);
 
-        if(sendto(sockfd, sndpkt_window[lastUnACKed], TCP_HDR_SIZE + get_data_size(sndpkt_window[lastUnACKed]), 0, 
-                    (const struct sockaddr *) &serveraddr, serverlen) < 0)
-        {
-            error("sendto");
+        for (int packet_no = lastUnACKed; packet_no < lastUnACKed + cwnd; packet_no++) { // retransmit all packets in the window
+            // if (sndpkt_window[i]->hdr.seqno >= sndpkt_window[lastUnACKed]->hdr.seqno) { // if older packets
+            printf("retransmitting packet %d\n", sndpkt_window[packet_no]->hdr.seqno);
+            if(sendto(sockfd, sndpkt_window[packet_no], TCP_HDR_SIZE + get_data_size(sndpkt_window[packet_no]), 0, 
+                        (const struct sockaddr *) &serveraddr, serverlen) < 0)
+            {
+                error("sendto");
+            }
+            // }
         }
+    }
+}
 
-        // for (int i = lastUnACKed; i < WINDOW_SIZE; i++) { // retransmit all packets in the window
-        //     if (sndpkt_window[i]->hdr.seqno >= sndpkt_window[lastUnACKed]->hdr.seqno) { // if older packets
-        //         // printf("retransmitting packet %d\n", sndpkt_window[i]->hdr.seqno);
-        //         if(sendto(sockfd, sndpkt_window[i], TCP_HDR_SIZE + get_data_size(sndpkt_window[i]), 0, 
-        //                     (const struct sockaddr *) &serveraddr, serverlen) < 0)
-        //         {
-        //             error("sendto");
-        //         }
-        //     }
-        // }
+void timeout(int sig)
+{
+    if (sig == SIGALRM)
+    {
+        VLOG(INFO, "Timeout happened");
+        // resend_packets();
     }
 }
 
@@ -147,44 +150,73 @@ int main (int argc, char **argv)
 
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
 
+    // read and buffer all the data that we want to send in an array
+    int last_seqno = 0; // last seqno available
+    int buffer_len = 0; // total num of packets in the buffer
+    while (1)
+    {
+        len = fread(buffer, 1, DATA_SIZE, fp);
+        if (len <= 0)
+        {
+            VLOG(INFO, "End Of File has been reached");
+            sndpkt = make_packet(0);
+            sndpkt->hdr.seqno = -1;
+        }
+
+        sndpkt = make_packet(len);
+        sndpkt->hdr.seqno = last_seqno;
+        last_seqno += len;
+        memcpy(sndpkt->data, buffer, len);
+        sndpkt_window[buffer_len] = sndpkt; // add packet to the buffer
+        buffer_len++;
+    }
+
     // Stop and wait protocol
     init_timer(RETRY, resend_packets);
     send_base = 0;
     next_seqno = 0;
 
     // send the first packet
-    // read the file data
-    len = fread(buffer, 1, DATA_SIZE, fp);
-    if (len <= 0)
-    {
-        VLOG(INFO, "End Of File has been reached");
-        sndpkt = make_packet(0);
-        sndpkt->hdr.seqno = next_seqno;
-        EOF_seqno = next_seqno;
-        EOF_read = 1; // mark as read
-        sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
-                (const struct sockaddr *) &serveraddr, serverlen);
-    }
+    // // read the file data
+    // len = fread(buffer, 1, DATA_SIZE, fp);
+    // if (len <= 0)
+    // {
+    //     VLOG(INFO, "End Of File has been reached");
+    //     sndpkt = make_packet(0);
+    //     sndpkt->hdr.seqno = next_seqno;
+    //     EOF_seqno = next_seqno;
+    //     EOF_read = 1; // mark as read
+    //     sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
+    //             (const struct sockaddr *) &serveraddr, serverlen);
+    // }
 
-    sndpkt = make_packet(len);
-    sndpkt->hdr.seqno = next_seqno;
-    next_seqno += len;
-    memcpy(sndpkt->data, buffer, len);
-    sndpkt_window[0] = sndpkt; // add packet to the window
+    // sndpkt = make_packet(len);
+    // sndpkt->hdr.seqno = next_seqno;
+    // next_seqno += len;
+    // memcpy(sndpkt->data, buffer, len);
+    // sndpkt_window[0] = sndpkt; // add packet to the window
 
-    if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
-                (const struct sockaddr *) &serveraddr, serverlen) < 0)
-    {
-        error("sendto");
-    }
-    VLOG(DEBUG, "Sending packet %d to %s", 
-            sndpkt_window[0]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+    // if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+    //             (const struct sockaddr *) &serveraddr, serverlen) < 0)
+    // {
+    //     error("sendto");
+    // }
+    // VLOG(DEBUG, "Sending packet %d to %s", 
+    //         sndpkt_window[0]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
 
-    gettimeofday(&sent_times[0], 0);
-    start_timer();
+    // gettimeofday(&sent_times[0], 0);
+    // start_timer();
 
     while (1)
     {
+        // lastpkt_sent = 
+        // sndpkt = sndpkt_window[];
+        if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+                    (const struct sockaddr *) &serveraddr, serverlen) < 0)
+        {
+            error("sendto");
+        }
+        /*
         //Wait for ACK
         do {
             do {
@@ -211,6 +243,9 @@ int main (int argc, char **argv)
                     // resend packets
                     // ssthresh = max(cwnd/2, 2)
                     // cwnd = 1
+                    // ssthresh = floor(fmaxf(cwnd/2, 2));
+                    // cwnd = 1;
+                    // cwnd_f = 1.0;
                     dup_cnt = 0; // set dup count to 0
                 }
             }while(recvpkt->hdr.ackno < next_seqno); // ignore duplicate ACKs
@@ -268,12 +303,18 @@ int main (int argc, char **argv)
                 {
                     error("sendto");
                 }
+
+                // window
+                // rtt estimator
+                // slow start, congestion avoidance , etc
+                
                 VLOG(DEBUG, "Sending packet %d to %s", 
                         sndpkt_window[packet_no]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
 
                 gettimeofday(&sent_times[packet_no], 0);
             }
         } while(recvpkt->hdr.ackno != next_seqno); // wait until the ACK is received for the end of the window
+        */
     }
 
     free(sndpkt);

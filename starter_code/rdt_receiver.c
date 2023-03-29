@@ -118,6 +118,8 @@ int main(int argc, char **argv) {
             wanted_seq_num = sndpkt->hdr.ackno;
         }
         else { // if the seq number is incorrect
+            // make a temp array and store it
+            // maintain a window
             sndpkt->hdr.ackno = wanted_seq_num;
         }
         
