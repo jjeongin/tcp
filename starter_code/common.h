@@ -11,6 +11,7 @@ extern int verbose;
 #define ALL     0x111
 
 #define WINDOW_SIZE 10 // window size as 10
+#define MAX_WINDOW_SIZE 100000 // max window size
 
 #define VLOG(level, ... ) \
     if(level & verbose) { \
