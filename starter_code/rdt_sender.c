@@ -122,6 +122,9 @@ int main (int argc, char **argv)
     char *hostname;
     char buffer[DATA_SIZE];
     FILE *fp;
+    FILE *csv;
+    
+    csv = fopen("CWND.csv", "w");
 
     /* check command line arguments */
     if (argc != 4) {
@@ -199,6 +202,7 @@ int main (int argc, char **argv)
                 error("sendto");
             }
             gettimeofday(&cur_time, 0);
+            fprintf(csv, " %llu, %d, %u \n", ((&sent_times[packet_no])->tv_sec*1000LL + ((&sent_times[packet_no])->tv_usec/1000)), cwnd, ssthresh);
             // printf("time when sent %lu\n", cur_time.tv_sec);
             sent_times[packet_no] = cur_time;
             next_seqno += get_data_size(sndpkt); // update next_seqno for this window
@@ -225,6 +229,7 @@ int main (int argc, char **argv)
             if (recvpkt->hdr.ackno == EOF_seqno && EOF_sent == 1) { // if EOF, terminate the program
                 // printf("EOF_seqno %d\n", EOF_seqno);
                 free(sndpkt);
+                fclose(csv);
                 return 0;
             }
             printf("ACK received %d, next_seqno %d\n", recvpkt->hdr.ackno, next_seqno);
