@@ -21,6 +21,12 @@
  */
 tcp_packet *recvpkt;
 tcp_packet *sndpkt;
+int wanted_seq_num = 0;
+int lastpkt_read = 0;
+
+tcp_packet *buffpkt;
+tcp_packet recvpkt_buffer[MAX_WINDOW_SIZE]; // packet window
+int buffpkt_no = 0;
 
 int main(int argc, char **argv) {
     int sockfd; /* socket */
@@ -32,7 +38,6 @@ int main(int argc, char **argv) {
     FILE *fp;
     char buffer[MSS_SIZE];
     struct timeval tp;
-    int wanted_seq_num = 0;
 
     /* 
      * check command line arguments 
@@ -96,10 +101,16 @@ int main(int argc, char **argv) {
         }
         recvpkt = (tcp_packet *) buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
+<<<<<<< Updated upstream
         // printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
         
         if ( recvpkt->hdr.data_size == 0 && recvpkt->hdr.seqno == wanted_seq_num) {
             //VLOG(INFO, "End Of File has been reached");
+=======
+        
+        if (recvpkt->hdr.data_size == 0 && recvpkt->hdr.seqno == wanted_seq_num) {
+            VLOG(INFO, "End Of File has been reached");
+>>>>>>> Stashed changes
             fclose(fp);
             break;
         }
@@ -116,11 +127,45 @@ int main(int argc, char **argv) {
             fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
             sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
             wanted_seq_num = sndpkt->hdr.ackno;
+<<<<<<< Updated upstream
         }
         else { // if the seq number is incorrect
             // make a temp array and store it
             // maintain a window
             sndpkt->hdr.ackno = wanted_seq_num;
+=======
+
+            // if the buffer is not empty
+            if (buffpkt_no > 0) {
+                // deliver all packets in the buffer
+                for (int i = 0; i < buffpkt_no; i++) {
+                    buffpkt = &recvpkt_buffer[i];
+                    printf("buffer packet seqno: %d\n", buffpkt->hdr.seqno);
+                    if (buffpkt->hdr.data_size == 0 && buffpkt->hdr.seqno == wanted_seq_num) {
+                        VLOG(INFO, "End Of File has been reached");
+                        fclose(fp);
+                        break;
+                    }
+                    fseek(fp, buffpkt->hdr.seqno, SEEK_SET);
+                    fwrite(buffpkt->data, 1, buffpkt->hdr.data_size, fp);
+
+                    sndpkt->hdr.ackno = buffpkt->hdr.seqno + buffpkt->hdr.data_size;
+                    wanted_seq_num = sndpkt->hdr.ackno;
+                }
+                // reset buffer
+                buffpkt_no = 0;
+                memset(recvpkt_buffer, 0, sizeof recvpkt_buffer);
+            }
+        }
+        else if (recvpkt->hdr.seqno > wanted_seq_num) { // if the seq number is out of order
+            printf("recvpkt->hdr.seqno %d, wanted_seq_num %d\n", recvpkt->hdr.seqno, wanted_seq_num);
+            recvpkt_buffer[buffpkt_no] = *recvpkt; // buffer the packet for the future use
+            buffpkt_no++; // increase the buffer index     
+            sndpkt->hdr.ackno = wanted_seq_num; // advertise the correct wanted_seq_num
+        }
+        else { // if dup packet
+            sndpkt->hdr.ackno = wanted_seq_num; // advertise the correct wanted_seq_num
+>>>>>>> Stashed changes
         }
         
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 

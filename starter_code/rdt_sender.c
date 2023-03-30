@@ -16,10 +16,18 @@
 #include"common.h"
 
 #define STDIN_FD    0
+<<<<<<< Updated upstream
 #define RETRY  120 // millisecond
 
 int next_seqno = 0;
 int send_base = 0;
+=======
+// #define RETRY  120 // millisecond
+
+int next_seqno = 0;
+int send_base = 0;
+int lastpkt_sent = 0; // last packet number that is sent
+>>>>>>> Stashed changes
 int cwnd = 1; // for cwnd size
 float cwnd_f = 1.0; // for the actual cwnd float size
 int ssthresh = 64;
@@ -40,6 +48,11 @@ sigset_t sigmask;
 struct timeval sent_times[MAX_WINDOW_SIZE]; // keep track of the time that a packet was sent
 struct timeval oldest_sent_time;
 struct timeval cur_time;
+float estimated_RTT = 10;
+float sample_RTT = 50;
+float dev_RTT = 0;
+int rto = 180; // default RTO as 3 sec
+
 
 void start_timer()
 {
@@ -74,9 +87,14 @@ void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
-        //Resend all packets range between sendBase and nextSeqNum
         VLOG(INFO, "Timeout happened");
+        // stop_timer();
+        // printf("Timer stopped\n");
+        ssthresh = floor(fmaxf(cwnd/2, 2));
+        cwnd = 1;
+        cwnd_f = 1.0;
 
+<<<<<<< Updated upstream
         lastUnACKed = (send_base / DATA_SIZE); // lastUnACKed packet's index in the window
         // printf("send_base %d, lastUnACKed %d\n", send_base, lastUnACKed);
 
@@ -89,7 +107,18 @@ void resend_packets(int sig)
                 error("sendto");
             }
             // }
+=======
+        lastpkt_sent = (send_base / DATA_SIZE);
+        printf("retransmitting packet %d\n", sndpkt_window[lastpkt_sent]->hdr.seqno);
+        if(sendto(sockfd, sndpkt_window[lastpkt_sent], TCP_HDR_SIZE + get_data_size(sndpkt_window[lastpkt_sent]), 0, 
+                    (const struct sockaddr *) &serveraddr, serverlen) < 0)
+        {
+            error("sendto");
+>>>>>>> Stashed changes
         }
+        // start_timer();
+        // printf("Timer started\n");
+        // update the sent time for this packet
     }
 }
 
@@ -151,25 +180,42 @@ int main (int argc, char **argv)
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
 
     // read and buffer all the data that we want to send in an array
+<<<<<<< Updated upstream
     int last_seqno = 0; // last seqno available
+=======
+    int EOF_seqno = 0; // last seqno available
+>>>>>>> Stashed changes
     int buffer_len = 0; // total num of packets in the buffer
     while (1)
     {
         len = fread(buffer, 1, DATA_SIZE, fp);
         if (len <= 0)
         {
-            VLOG(INFO, "End Of File has been reached");
+            // VLOG(INFO, "End Of File has been reached");
             sndpkt = make_packet(0);
+<<<<<<< Updated upstream
             sndpkt->hdr.seqno = -1;
         }
 
         sndpkt = make_packet(len);
         sndpkt->hdr.seqno = last_seqno;
         last_seqno += len;
+=======
+            sndpkt->hdr.seqno = EOF_seqno;
+            sndpkt_window[buffer_len] = sndpkt;
+            buffer_len++;
+            break;
+        }
+
+        sndpkt = make_packet(len);
+        sndpkt->hdr.seqno = EOF_seqno;
+        EOF_seqno += len;
+>>>>>>> Stashed changes
         memcpy(sndpkt->data, buffer, len);
         sndpkt_window[buffer_len] = sndpkt; // add packet to the buffer
         buffer_len++;
     }
+<<<<<<< Updated upstream
 
     // Stop and wait protocol
     init_timer(RETRY, resend_packets);
@@ -266,14 +312,88 @@ int main (int argc, char **argv)
             lastUnACKed = (send_base / DATA_SIZE);
 
             // reconfigure the timer with the lastUnACKed packet's sent_time
+=======
+    printf("EOF_seqno %d\n", EOF_seqno);
+
+    // Stop and wait protocol
+    init_timer(rto, resend_packets);
+
+    // send_base: last_packet_sent (start of the window in bytes)
+    // next_seqno: end of the window in bytes
+    while (1)
+    {
+        // send packets in the current window (cwnd)
+        lastpkt_sent = (send_base / DATA_SIZE);
+        for (int packet_no = lastpkt_sent; packet_no < lastpkt_sent + cwnd; packet_no++) {
+            sndpkt = sndpkt_window[packet_no];
+            printf("Sending the packet %d, cwnd %d\n", sndpkt->hdr.seqno, cwnd);
+            // printf("cwnd %d\n", cwnd);
+            if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0,
+                        (const struct sockaddr *) &serveraddr, serverlen) < 0)
+            {
+                error("sendto");
+            }
+            gettimeofday(&sent_times[packet_no], 0);
+            next_seqno += get_data_size(sndpkt); // update next_seqno for this window
+            if (get_data_size(sndpkt) == 0) {
+                VLOG(INFO, "End Of File has been reached");
+                EOF_read = 1;
+                break;
+            }
+        }
+        
+        start_timer();
+        // printf("Timer started\n");
+
+        // wait for an ACK
+        do {
+            if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+                    (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+            {
+                error("recvfrom");
+            }
+            recvpkt = (tcp_packet *) buffer;
+            assert(get_data_size(recvpkt) <= DATA_SIZE);
+            send_base = recvpkt->hdr.ackno; // slide the window (set send_base to the next byte we should send)
+            
+            if (recvpkt->hdr.ackno == EOF_seqno && EOF_read == 1) { // if EOF, terminate the program
+                // printf("EOF_seqno %d\n", EOF_seqno);
+                free(sndpkt);
+                return 0;
+            }
+            // printf("recvpkt->hdr.ackno %d, next_seqno %d\n", recvpkt->hdr.ackno, next_seqno);
+            
+            // Fast Retransmit
+            if (dup_ackno == recvpkt->hdr.ackno) {
+                dup_cnt++; // increase counter for dup ACKs
+            }
+            dup_ackno = recvpkt->hdr.ackno;
+            if (dup_cnt == 3) { // Fast Retransmit
+                // resend packets
+                printf("Fast Retrasmit for packet %d\n", dup_ackno);
+                resend_packets(SIGALRM);
+                dup_cnt = 0; // set dup count to 0
+            }
+            
+            // handle timer
+>>>>>>> Stashed changes
             stop_timer();
+            // printf("Timer stopped\n");
+
+            // update timer with RTT estimator
+            lastUnACKed = send_base / DATA_SIZE;
             gettimeofday(&cur_time, 0);
             oldest_sent_time = sent_times[lastUnACKed];
-            int elapsed_time = (int) timedifference_msec(oldest_sent_time, cur_time);
-            elapsed_time = RETRY - elapsed_time;
-            timer.it_value.tv_sec = elapsed_time / 1000;       // sets an initial value
-            timer.it_value.tv_usec = (elapsed_time % 1000) * 1000;
+            sample_RTT = (int) timedifference_msec(oldest_sent_time, cur_time); // sample RTT
+            estimated_RTT = (1.0 - 0.125) * estimated_RTT + 0.125 * sample_RTT;
+            dev_RTT = (1.0 - 0.25) * dev_RTT + 0.25 * fabs(sample_RTT - estimated_RTT);
+            rto = (int) (estimated_RTT + (4 * dev_RTT));
+            // elapsed_time = RETRY - elapsed_time;
+            // timer.it_value.tv_sec = elapsed_time / 1000;
+            // timer.it_value.tv_usec = (elapsed_time % 1000) * 1000;
+
             start_timer();
+<<<<<<< Updated upstream
             
             // send the next window
             for (int packet_no = lastUnACKed; packet_no < lastUnACKed + cwnd; packet_no++) {
@@ -291,13 +411,15 @@ int main (int argc, char **argv)
                             (const struct sockaddr *) &serveraddr, serverlen);
                     break;
                 }
+=======
+            // printf("Timer started\n");
+        } while(recvpkt->hdr.ackno < next_seqno);   // ignore duplicate ACKs
+>>>>>>> Stashed changes
 
-                sndpkt = make_packet(len);
-                sndpkt->hdr.seqno = next_seqno;
-                next_seqno += len;
-                memcpy(sndpkt->data, buffer, len);
-                sndpkt_window[packet_no] = sndpkt; // add packet to the window
+        stop_timer();
+        // printf("Timer stopped\n");
 
+<<<<<<< Updated upstream
                 if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
                             (const struct sockaddr *) &serveraddr, serverlen) < 0)
                 {
@@ -315,6 +437,16 @@ int main (int argc, char **argv)
             }
         } while(recvpkt->hdr.ackno != next_seqno); // wait until the ACK is received for the end of the window
         */
+=======
+        // update the window size (cwnd)
+        if (cwnd < ssthresh) { // Slow Start
+            cwnd_f += 1.0;
+        }
+        else { // Congestion Avoidance
+            cwnd_f += 1/cwnd;
+        }
+        cwnd = floor(cwnd_f);
+>>>>>>> Stashed changes
     }
 
     free(sndpkt);
