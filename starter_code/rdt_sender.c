@@ -35,17 +35,18 @@ tcp_packet *sndpkt_window[MAX_WINDOW_SIZE]; // packet window
 tcp_packet *recvpkt;
 int lastUnACKed;
 int EOF_seqno;
-int EOF_read = 0; // 1 if EOF has been read
+int EOF_sent = 0; // 1 if EOF has been read
 sigset_t sigmask;
 
 struct timeval sent_times[MAX_WINDOW_SIZE]; // keep track of the time that a packet was sent
+int resent_mark[MAX_WINDOW_SIZE]; // mark if this ACK is from a retransmitted packet
 struct timeval oldest_sent_time;
 struct timeval cur_time;
-float estimated_RTT = 10;
-float sample_RTT = 50;
+float estimated_RTT = 0;
+float sample_RTT = 0;
 float dev_RTT = 0;
-int rto = 180; // default RTO as 3 sec
-
+int backoff = 1; // backoff factor for RTO
+unsigned long int RTO = 3000; // default RTO as 3 sec
 
 void start_timer()
 {
@@ -81,31 +82,30 @@ void resend_packets(int sig)
     if (sig == SIGALRM)
     {
         VLOG(INFO, "Timeout happened");
-        // stop_timer();
-        // printf("Timer stopped\n");
+        // adjust the window size
         ssthresh = floor(fmaxf(cwnd/2, 2));
         cwnd = 1;
         cwnd_f = 1.0;
 
-        lastpkt_sent = (send_base / DATA_SIZE);
+        lastpkt_sent = send_base / DATA_SIZE;
+        resent_mark[lastpkt_sent] = 1; // mark as true
+        gettimeofday(&sent_times[lastpkt_sent], 0); // update the last sent time of this packet
+        // backoff = backoff * 2; // double the backoff factor
+        RTO = RTO * 2;
+
+        stop_timer();
+        timer.it_value.tv_sec = RTO / 1000;
+        timer.it_value.tv_usec = (RTO % 1000) * 1000;
+        start_timer();
+        printf("RTO %ld\n", RTO);
+        // next_seqno = send_base + get_data_size(sndpkt_window[lastpkt_sent]);
+
         printf("retransmitting packet %d\n", sndpkt_window[lastpkt_sent]->hdr.seqno);
         if(sendto(sockfd, sndpkt_window[lastpkt_sent], TCP_HDR_SIZE + get_data_size(sndpkt_window[lastpkt_sent]), 0, 
                     (const struct sockaddr *) &serveraddr, serverlen) < 0)
         {
             error("sendto");
         }
-        // start_timer();
-        // printf("Timer started\n");
-        // update the sent time for this packet
-    }
-}
-
-void timeout(int sig)
-{
-    if (sig == SIGALRM)
-    {
-        VLOG(INFO, "Timeout happened");
-        // resend_packets();
     }
 }
 
@@ -172,7 +172,6 @@ int main (int argc, char **argv)
             buffer_len++;
             break;
         }
-
         sndpkt = make_packet(len);
         sndpkt->hdr.seqno = EOF_seqno;
         EOF_seqno += len;
@@ -183,7 +182,7 @@ int main (int argc, char **argv)
     printf("EOF_seqno %d\n", EOF_seqno);
 
     // Stop and wait protocol
-    init_timer(rto, resend_packets);
+    init_timer(RTO, resend_packets);
 
     // send_base: last_packet_sent (start of the window in bytes)
     // next_seqno: end of the window in bytes
@@ -194,24 +193,24 @@ int main (int argc, char **argv)
         for (int packet_no = lastpkt_sent; packet_no < lastpkt_sent + cwnd; packet_no++) {
             sndpkt = sndpkt_window[packet_no];
             printf("Sending the packet %d, cwnd %d\n", sndpkt->hdr.seqno, cwnd);
-            // printf("cwnd %d\n", cwnd);
             if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0,
                         (const struct sockaddr *) &serveraddr, serverlen) < 0)
             {
                 error("sendto");
             }
-            gettimeofday(&sent_times[packet_no], 0);
+            gettimeofday(&cur_time, 0);
+            // printf("time when sent %lu\n", cur_time.tv_sec);
+            sent_times[packet_no] = cur_time;
             next_seqno += get_data_size(sndpkt); // update next_seqno for this window
             if (get_data_size(sndpkt) == 0) {
                 VLOG(INFO, "End Of File has been reached");
-                EOF_read = 1;
+                EOF_sent = 1;
                 break;
             }
         }
         
         start_timer();
-        // printf("Timer started\n");
-
+        printf("RTO %ld\n", RTO);
         // wait for an ACK
         do {
             if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
@@ -223,12 +222,12 @@ int main (int argc, char **argv)
             assert(get_data_size(recvpkt) <= DATA_SIZE);
             send_base = recvpkt->hdr.ackno; // slide the window (set send_base to the next byte we should send)
             
-            if (recvpkt->hdr.ackno == EOF_seqno && EOF_read == 1) { // if EOF, terminate the program
+            if (recvpkt->hdr.ackno == EOF_seqno && EOF_sent == 1) { // if EOF, terminate the program
                 // printf("EOF_seqno %d\n", EOF_seqno);
                 free(sndpkt);
                 return 0;
             }
-            // printf("recvpkt->hdr.ackno %d, next_seqno %d\n", recvpkt->hdr.ackno, next_seqno);
+            printf("ACK received %d, next_seqno %d\n", recvpkt->hdr.ackno, next_seqno);
             
             // Fast Retransmit
             if (dup_ackno == recvpkt->hdr.ackno) {
@@ -242,35 +241,37 @@ int main (int argc, char **argv)
                 dup_cnt = 0; // set dup count to 0
             }
             
-            // handle timer
-            stop_timer();
-            // printf("Timer stopped\n");
-
             // update timer with RTT estimator
-            lastUnACKed = send_base / DATA_SIZE;
+            lastUnACKed = send_base / DATA_SIZE - 1;
+            if (resent_mark[lastUnACKed] == 1) { // if received an ACK for the retransmitted packet
+                resent_mark[lastUnACKed] = 0;
+                backoff = 1;
+            }
             gettimeofday(&cur_time, 0);
             oldest_sent_time = sent_times[lastUnACKed];
-            sample_RTT = (int) timedifference_msec(oldest_sent_time, cur_time); // sample RTT
+            sample_RTT = timedifference_msec(oldest_sent_time, cur_time); // sample RTT
+            // printf("lastUnACKed %d\n", lastUnACKed);
+            // printf("oldest_sent_time in array %lu\n", sent_times[lastUnACKed].tv_sec);
+            // printf("oldest_sent_time %lu, sample RTT %f\n", oldest_sent_time.tv_sec, sample_RTT);
             estimated_RTT = (1.0 - 0.125) * estimated_RTT + 0.125 * sample_RTT;
             dev_RTT = (1.0 - 0.25) * dev_RTT + 0.25 * fabs(sample_RTT - estimated_RTT);
-            rto = (int) (estimated_RTT + (4 * dev_RTT));
-            // elapsed_time = RETRY - elapsed_time;
-            // timer.it_value.tv_sec = elapsed_time / 1000;
-            // timer.it_value.tv_usec = (elapsed_time % 1000) * 1000;
-
-            start_timer();
-            // printf("Timer started\n");
-        } while(recvpkt->hdr.ackno < next_seqno);   // ignore duplicate ACKs
+            RTO = (int) (estimated_RTT + (4 * dev_RTT));
+            // RTO = backoff * RTO; // multiply backoff factor
+            timer.it_value.tv_sec = RTO / 1000;
+            timer.it_value.tv_usec = (RTO % 1000) * 1000;
+        } while(recvpkt->hdr.ackno < next_seqno); // ignore duplicate ACKs
 
         stop_timer();
-        // printf("Timer stopped\n");
 
         // update the window size (cwnd)
+        // printf("ssthresh %d\n", ssthresh);
         if (cwnd < ssthresh) { // Slow Start
+            // printf("SLOW START: cwnd %d, cwnd_f: %f\n", cwnd, cwnd_f);
             cwnd_f += 1.0;
         }
         else { // Congestion Avoidance
-            cwnd_f += 1/cwnd;
+            // printf("CONGESTION AVOIDANCE: cwnd %d, cwnd_f: %f\n", cwnd, cwnd_f);
+            cwnd_f += (1.0 / cwnd);
         }
         cwnd = floor(cwnd_f);
     }
@@ -279,6 +280,3 @@ int main (int argc, char **argv)
     return 0;
 
 }
-
-
-
